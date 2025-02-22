@@ -4,6 +4,8 @@ from datetime import datetime
 import os
 from functools import wraps
 import re
+import random
+import smtplib
 
 app = Flask(__name__)
 app.secret_key = os.urandom(24)  # For session management
@@ -22,9 +24,12 @@ def init_db():
     c.execute('''
         CREATE TABLE IF NOT EXISTS users (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
+            name TEXT NOT NULL,
             email TEXT UNIQUE NOT NULL,
             password TEXT NOT NULL,
             phone TEXT UNIQUE NOT NULL,
+            verified INTEGER DEFAULT 0,
+            verification_code TEXT,
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         )
     ''')
@@ -45,6 +50,19 @@ def init_db():
     conn.close()
 
 init_db()
+
+# Helper function to send verification email
+def send_verification_email(email, code):
+    sender_email = "your-email@gmail.com"
+    sender_password = "your-email-password"
+    subject = "Email Verification Code"
+    body = f"Your verification code is: {code}"
+    message = f"Subject: {subject}\n\n{body}"
+    
+    with smtplib.SMTP("smtp.gmail.com", 587) as server:
+        server.starttls()
+        server.login(sender_email, sender_password)
+        server.sendmail(sender_email, email, message)
 
 # Login required decorator for clients
 def login_required(f):
@@ -73,34 +91,46 @@ def index():
 @app.route('/register', methods=['GET', 'POST'])
 def register():
     if request.method == 'POST':
+        name = request.form.get('name')
         email = request.form.get('email')
         password = request.form.get('password')
         phone = request.form.get('phone')
-
-        # Basic validation
-        if not all([email, password, phone]):
-            flash('All fields are required', 'error')
-            return render_template('register.html')
-
-        # Validate phone number (simple validation)
-        if not re.match(r'^\+?1?\d{9,15}$', phone):
-            flash('Invalid phone number format', 'error')
-            return render_template('register.html')
+        verification_code = str(random.randint(100000, 999999))
 
         try:
             conn = sqlite3.connect('orders.db')
             c = conn.cursor()
-            c.execute('INSERT INTO users (email, password, phone) VALUES (?, ?, ?)',
-                     (email, password, phone))
+            c.execute('INSERT INTO users (name, email, password, phone, verification_code) VALUES (?, ?, ?, ?, ?)',
+                     (name, email, password, phone, verification_code))
             conn.commit()
             conn.close()
-            flash('Registration successful! Please login.', 'success')
-            return redirect(url_for('login'))
+            send_verification_email(email, verification_code)
+            flash('Registration successful! Please check your email for the verification code.', 'success')
+            return redirect(url_for('verify_email'))
         except sqlite3.IntegrityError:
             flash('Email or phone number already exists', 'error')
-            return render_template('register.html')
-
     return render_template('register.html')
+
+@app.route('/verify_email', methods=['GET', 'POST'])
+def verify_email():
+    if request.method == 'POST':
+        email = request.form.get('email')
+        code = request.form.get('code')
+        
+        conn = sqlite3.connect('orders.db')
+        c = conn.cursor()
+        c.execute('SELECT verification_code FROM users WHERE email = ?', (email,))
+        user = c.fetchone()
+        
+        if user and user[0] == code:
+            c.execute('UPDATE users SET verified = 1 WHERE email = ?', (email,))
+            conn.commit()
+            conn.close()
+            flash('Email verified! You can now log in.', 'success')
+            return redirect(url_for('login'))
+        else:
+            flash('Invalid verification code', 'error')
+    return render_template('verify_email.html')
 
 @app.route('/login', methods=['GET', 'POST'])
 def login():
@@ -110,149 +140,31 @@ def login():
 
         conn = sqlite3.connect('orders.db')
         c = conn.cursor()
-        c.execute('SELECT id, email FROM users WHERE email = ? AND password = ?',
-                 (email, password))
+        c.execute('SELECT id, name, email, verified FROM users WHERE email = ? AND password = ?', (email, password))
         user = c.fetchone()
         conn.close()
 
         if user:
+            if user[3] == 0:
+                flash('Please verify your email before logging in.', 'error')
+                return redirect(url_for('verify_email'))
             session['user_id'] = user[0]
-            session['user_email'] = user[1]
+            session['user_name'] = user[1]
+            session['user_email'] = user[2]
             return redirect(url_for('index'))
         else:
             flash('Invalid credentials', 'error')
-
     return render_template('login.html')
-
-@app.route('/logout')
-def logout():
-    session.pop('user_id', None)
-    session.pop('user_email', None)
-    return redirect(url_for('login'))
-
-@app.route('/admin/login', methods=['GET', 'POST'])
-def admin_login():
-    if request.method == 'POST':
-        username = request.form.get('username')
-        password = request.form.get('password')
-        
-        if username == ADMIN_USERNAME and password == ADMIN_PASSWORD:
-            session['admin_logged_in'] = True
-            return redirect(url_for('admin_dashboard'))
-        else:
-            return render_template('admin_login.html', error='Invalid credentials')
-    
-    return render_template('admin_login.html')
-
-@app.route('/admin/logout')
-def admin_logout():
-    session.pop('admin_logged_in', None)
-    return redirect(url_for('admin_login'))
 
 @app.route('/admin/dashboard')
 @admin_required
 def admin_dashboard():
-    return render_template('admin_dashboard.html')
-
-@app.route('/api/orders', methods=['POST'])
-@login_required
-def create_order():
-    try:
-        data = request.json
-        wallet_address = data.get('wallet_address')
-        amount = float(data.get('amount'))
-        email = session['user_email']
-        user_id = session['user_id']
-
-        if not all([wallet_address, amount]) or amount <= 0:
-            return jsonify({'error': 'Invalid input data'}), 400
-
-        pkr_amount = amount * USDT_RATE
-
-        conn = sqlite3.connect('orders.db')
-        c = conn.cursor()
-        c.execute('''
-            INSERT INTO orders (user_id, wallet_address, amount, pkr_amount, email)
-            VALUES (?, ?, ?, ?, ?)
-        ''', (user_id, wallet_address, amount, pkr_amount, email))
-        conn.commit()
-        conn.close()
-
-        return jsonify({
-            'status': 'success',
-            'message': 'Order created successfully'
-        })
-    except Exception as e:
-        return jsonify({'error': str(e)}), 500
-
-@app.route('/api/orders', methods=['GET'])
-def get_orders():
-    try:
-        conn = sqlite3.connect('orders.db')
-        c = conn.cursor()
-        
-        if 'admin_logged_in' in session:
-            c.execute('''
-                SELECT o.*, u.phone 
-                FROM orders o 
-                JOIN users u ON o.user_id = u.id 
-                ORDER BY o.created_at DESC
-            ''')
-        else:
-            user_id = session.get('user_id')
-            if not user_id:
-                return jsonify({'error': 'Unauthorized'}), 401
-            c.execute('''
-                SELECT * FROM orders 
-                WHERE user_id = ? 
-                ORDER BY created_at DESC
-            ''', (user_id,))
-        
-        orders = c.fetchall()
-        conn.close()
-
-        orders_list = []
-        for order in orders:
-            order_dict = {
-                'id': order[0],
-                'user_id': order[1],
-                'wallet_address': order[2],
-                'amount': order[3],
-                'pkr_amount': order[4],
-                'email': order[5],
-                'status': order[6],
-                'created_at': order[7]
-            }
-            if 'admin_logged_in' in session:
-                order_dict['phone'] = order[8]
-            orders_list.append(order_dict)
-
-        return jsonify(orders_list)
-    except Exception as e:
-        return jsonify({'error': str(e)}), 500
-
-@app.route('/api/orders/<int:order_id>/status', methods=['PUT'])
-@admin_required
-def update_order_status(order_id):
-    try:
-        data = request.json
-        new_status = data.get('status')
-        
-        if new_status not in ['pending', 'completed', 'cancelled']:
-            return jsonify({'error': 'Invalid status'}), 400
-
-        conn = sqlite3.connect('orders.db')
-        c = conn.cursor()
-        c.execute('UPDATE orders SET status = ? WHERE id = ?', (new_status, order_id))
-        conn.commit()
-        conn.close()
-
-        return jsonify({
-            'status': 'success',
-            'message': 'Order status updated successfully'
-        })
-    except Exception as e:
-        return jsonify({'error': str(e)}), 500
+    conn = sqlite3.connect('orders.db')
+    c = conn.cursor()
+    c.execute('SELECT id, name, email, phone, verified FROM users ORDER BY created_at DESC')
+    users = c.fetchall()
+    conn.close()
+    return render_template('admin_dashboard.html', users=users)
 
 if __name__ == '__main__':
     app.run(debug=True)
