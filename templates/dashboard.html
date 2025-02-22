@@ -1,0 +1,166 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Dashboard - USDT Order System</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+</head>
+<body class="min-h-screen bg-gradient-to-br from-blue-900 to-black text-white">
+    <div class="container mx-auto px-4 py-8">
+        <div class="flex justify-between items-center mb-8">
+            <h1 class="text-3xl font-bold">USDT Order System</h1>
+            <div class="flex items-center gap-4">
+                <span class="text-blue-400">Current Rate: 1 USDT = {{ usdt_rate }} INR</span>
+                <a href="{{ url_for('logout') }}" class="bg-red-500 hover:bg-red-600 text-white px-4 py-2 rounded-lg transition-colors">
+                    Logout
+                </a>
+            </div>
+        </div>
+
+        <div class="grid grid-cols-1 lg:grid-cols-2 gap-8">
+            <!-- Order Form -->
+            <div class="bg-white/10 backdrop-blur-lg rounded-xl p-6 shadow-2xl">
+                <h2 class="text-xl font-semibold mb-6">Place New Order</h2>
+                <form id="orderForm" class="space-y-6">
+                    <div>
+                        <label class="block text-sm font-medium mb-2">USDT Wallet Address</label>
+                        <input
+                            type="text"
+                            name="wallet_address"
+                            class="w-full px-4 py-2 rounded-lg bg-white/5 border border-gray-600 focus:border-blue-400 focus:ring-1 focus:ring-blue-400 text-white"
+                            required
+                        >
+                    </div>
+
+                    <div>
+                        <label class="block text-sm font-medium mb-2">Amount (USDT)</label>
+                        <input
+                            type="number"
+                            name="amount"
+                            step="0.01"
+                            min="0"
+                            class="w-full px-4 py-2 rounded-lg bg-white/5 border border-gray-600 focus:border-blue-400 focus:ring-1 focus:ring-blue-400 text-white"
+                            required
+                            oninput="updateINRAmount(this.value)"
+                        >
+                    </div>
+
+                    <div>
+                        <label class="block text-sm font-medium mb-2">Amount (INR)</label>
+                        <input
+                            type="number"
+                            id="inrAmount"
+                            class="w-full px-4 py-2 rounded-lg bg-white/5 border border-gray-600 focus:border-blue-400 focus:ring-1 focus:ring-blue-400 text-white"
+                            readonly
+                        >
+                    </div>
+
+                    <button
+                        type="submit"
+                        class="w-full bg-blue-500 hover:bg-blue-600 text-white font-semibold py-3 px-6 rounded-lg transition-colors"
+                    >
+                        Place Order
+                    </button>
+                </form>
+            </div>
+
+            <!-- Orders List -->
+            <div class="bg-white/10 backdrop-blur-lg rounded-xl p-6 shadow-2xl">
+                <h2 class="text-xl font-semibold mb-6">Your Orders</h2>
+                <div class="overflow-x-auto">
+                    <table id="ordersTable" class="min-w-full">
+                        <thead>
+                            <tr class="text-left border-b border-gray-700">
+                                <th class="p-4">Wallet Address</th>
+                                <th class="p-4">Amount (USDT)</th>
+                                <th class="p-4">Amount (INR)</th>
+                                <th class="p-4">Status</th>
+                                <th class="p-4">Created At</th>
+                            </tr>
+                        </thead>
+                        <tbody></tbody>
+                    </table>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        const USDT_RATE = {{ usdt_rate }};
+
+        function updateINRAmount(usdtAmount) {
+            const inrAmount = usdtAmount * USDT_RATE;
+            document.getElementById('inrAmount').value = inrAmount.toFixed(2);
+        }
+
+        document.getElementById('orderForm').addEventListener('submit', async (e) => {
+            e.preventDefault();
+            
+            const formData = new FormData(e.target);
+            const data = {
+                wallet_address: formData.get('wallet_address'),
+                amount: formData.get('amount')
+            };
+
+            try {
+                const response = await fetch('/api/orders', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify(data)
+                });
+
+                const result = await response.json();
+
+                if (response.ok) {
+                    alert('Order submitted successfully!');
+                    e.target.reset();
+                    document.getElementById('inrAmount').value = '';
+                    loadOrders();
+                } else {
+                    alert(result.error || 'Failed to submit order');
+                }
+            } catch (error) {
+                alert('Error submitting order');
+                console.error('Error:', error);
+            }
+        });
+
+        function loadOrders() {
+            fetch('/api/orders')
+                .then(response => response.json())
+                .then(orders => {
+                    const tbody = document.querySelector('#ordersTable tbody');
+                    tbody.innerHTML = orders.map(order => `
+                        <tr class="border-t border-gray-700">
+                            <td class="p-4">${order.wallet_address}</td>
+                            <td class="p-4">${order.amount} USDT</td>
+                            <td class="p-4">${order.inr_amount.toFixed(2)} INR</td>
+                            <td class="p-4">
+                                <span class="px-2 py-1 rounded-full text-xs ${
+                                    order.status === 'pending' ? 'bg-yellow-500/20 text-yellow-300' :
+                                    order.status === 'completed' ? 'bg-green-500/20 text-green-300' :
+                                    'bg-red-500/20 text-red-300'
+                                }">
+                                    ${order.status}
+                                </span>
+                            </td>
+                            <td class="p-4">${new Date(order.created_at).toLocaleString()}</td>
+                        </tr>
+                    `).join('');
+                })
+                .catch(error => {
+                    console.error('Error loading orders:', error);
+                });
+        }
+
+        // Initial load
+        loadOrders();
+
+        // Refresh every 30 seconds
+        setInterval(loadOrders, 30000);
+    </script>
+</body>
+</html>

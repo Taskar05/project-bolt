@@ -1,0 +1,125 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Admin Dashboard - USDT Order System</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+</head>
+<body class="min-h-screen bg-gradient-to-br from-blue-900 to-black text-white">
+    <div class="container mx-auto px-4 py-8">
+        <div class="flex justify-between items-center mb-8">
+            <h1 class="text-3xl font-bold">USDT Order System Dashboard</h1>
+            <a href="/admin/logout" class="bg-red-500 hover:bg-red-600 text-white px-4 py-2 rounded-lg transition-colors">
+                Logout
+            </a>
+        </div>
+
+        <div class="bg-white/10 backdrop-blur-lg rounded-xl p-6 shadow-2xl">
+            <div class="flex justify-between items-center mb-6">
+                <h2 class="text-xl font-semibold">Order Management</h2>
+                <div class="flex gap-4">
+                    <select id="statusFilter" class="bg-white/5 border border-gray-600 rounded-lg px-3 py-2 text-sm">
+                        <option value="">All Status</option>
+                        <option value="pending">Pending</option>
+                        <option value="completed">Completed</option>
+                        <option value="cancelled">Cancelled</option>
+                    </select>
+                </div>
+            </div>
+
+            <div class="overflow-x-auto">
+                <table id="ordersTable" class="min-w-full">
+                    <thead>
+                        <tr class="text-left border-b border-gray-700">
+                            <th class="p-4">ID</th>
+                            <th class="p-4">Wallet Address</th>
+                            <th class="p-4">Amount</th>
+                            <th class="p-4">Email</th>
+                            <th class="p-4">Status</th>
+                            <th class="p-4">Created At</th>
+                            <th class="p-4">Actions</th>
+                        </tr>
+                    </thead>
+                    <tbody></tbody>
+                </table>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        function updateOrderStatus(orderId, newStatus) {
+            return fetch(`/api/orders/${orderId}/status`, {
+                method: 'PUT',
+                headers: {
+                    'Content-Type': 'application/json'
+                },
+                body: JSON.stringify({ status: newStatus })
+            })
+            .then(response => {
+                if (!response.ok) throw new Error('Failed to update status');
+                loadOrders();
+            })
+            .catch(error => {
+                console.error('Error:', error);
+                alert('Failed to update order status');
+            });
+        }
+
+        function loadOrders() {
+            const statusFilter = document.getElementById('statusFilter').value;
+            
+            fetch('/api/orders')
+                .then(response => response.json())
+                .then(orders => {
+                    const filteredOrders = statusFilter
+                        ? orders.filter(order => order.status === statusFilter)
+                        : orders;
+
+                    const tbody = document.querySelector('#ordersTable tbody');
+                    tbody.innerHTML = filteredOrders.map(order => `
+                        <tr class="border-t border-gray-700">
+                            <td class="p-4">${order.id}</td>
+                            <td class="p-4">${order.wallet_address}</td>
+                            <td class="p-4">${order.amount} USDT</td>
+                            <td class="p-4">${order.email}</td>
+                            <td class="p-4">
+                                <span class="px-2 py-1 rounded-full text-xs ${
+                                    order.status === 'pending' ? 'bg-yellow-500/20 text-yellow-300' :
+                                    order.status === 'completed' ? 'bg-green-500/20 text-green-300' :
+                                    'bg-red-500/20 text-red-300'
+                                }">
+                                    ${order.status}
+                                </span>
+                            </td>
+                            <td class="p-4">${new Date(order.created_at).toLocaleString()}</td>
+                            <td class="p-4">
+                                <select
+                                    onchange="updateOrderStatus(${order.id}, this.value); this.value='';"
+                                    class="bg-white/5 border border-gray-600 rounded-lg px-3 py-2 text-sm"
+                                >
+                                    <option value="">Update Status</option>
+                                    <option value="pending">Set Pending</option>
+                                    <option value="completed">Set Completed</option>
+                                    <option value="cancelled">Set Cancelled</option>
+                                </select>
+                            </td>
+                        </tr>
+                    `).join('');
+                })
+                .catch(error => {
+                    console.error('Error loading orders:', error);
+                });
+        }
+
+        // Initial load
+        loadOrders();
+
+        // Set up status filter
+        document.getElementById('statusFilter').addEventListener('change', loadOrders);
+
+        // Refresh every 30 seconds
+        setInterval(loadOrders, 30000);
+    </script>
+</body>
+</html>
